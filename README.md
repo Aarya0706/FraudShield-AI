@@ -4,15 +4,15 @@
 
 ### Real-Time Financial Fraud Detection with Explainable Machine Learning
 
-A production-style fraud detection platform powered by **XGBoost**, **FastAPI**, and an interactive web dashboard. Trained on **6.86M PaySim transactions** with pre-transaction features and deployed using **Vercel + Render**.
+A production-style fraud detection platform powered by **XGBoost**, **FastAPI**, and an interactive web dashboard. Trained on **6.36M PaySim transactions** with pre-transaction features and deployed using **Vercel + Render**.
 
 <p>
 
 <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white"/>
 <img src="https://img.shields.io/badge/FastAPI-0.111-009688?style=for-the-badge&logo=fastapi&logoColor=white"/>
 <img src="https://img.shields.io/badge/XGBoost-2.0.3-AA4400?style=for-the-badge"/>
-<img src="https://img.shields.io/badge/ROC--AUC-0.9997-success?style=for-the-badge"/>
-<img src="https://img.shields.io/badge/Dataset-6.86M-orange?style=for-the-badge"/>
+<img src="https://img.shields.io/badge/ROC--AUC-0.9998-success?style=for-the-badge"/>
+<img src="https://img.shields.io/badge/Dataset-6.36M-orange?style=for-the-badge"/>
 <img src="https://img.shields.io/badge/Deployment-Vercel%20%2B%20Render-black?style=for-the-badge"/>
 
 </p>
@@ -77,29 +77,32 @@ Prediction Response
 
 ## 📊 Model Performance
 
-Current metrics from the latest training run, evaluated on a **time-aware split** (see [Evaluation methodology](#-evaluation-methodology) below):
+Current metrics from the latest training run, evaluated on a **time-aware split** with the decision **threshold selected on a held-out validation split** (see [Evaluation methodology](#-evaluation-methodology) below) — the test set below is touched exactly once, for this report:
 
-| Metric        |         Score |
-| ------------- | ------------: |
-| ROC-AUC       |    **0.9997** |
-| PR-AUC        |    **0.9933** |
-| Precision     |    **95.39%** |
-| Recall        |    **95.68%** |
-| F1 Score      |    **0.9553** |
-| Accuracy      |    **99.99%** |
-| Training Rows | **5,591,878** |
-| Test Rows     | **1,272,524** |
-| Total Rows    | **6,864,402** |
-| Features      |        **10** |
-| F1 Threshold  |    **0.9839** |
+| Metric            |         Score |
+| ----------------- | ------------: |
+| ROC-AUC           |    **0.9998** |
+| PR-AUC            |    **0.9972** |
+| Precision (fraud) |    **99.49%** |
+| Recall (fraud)    |    **95.93%** |
+| F1 Score (fraud)  |    **0.9768** |
+| Accuracy          |    **99.98%** |
+| Training Rows     | **4,581,086** |
+| Validation Rows   |   **509,010** |
+| Test Rows         | **1,272,524** |
+| Total Rows        | **6,362,620** |
+| Features          |        **10** |
+| F1 Threshold      |     **0.991** |
+
+*(Sourced directly from `models/metrics.json`: roc_auc 0.99981, pr_auc 0.99717, precision 0.99488, recall 0.95933, f1 0.97678, accuracy 0.99985 — rounded above for display.)*
 
 ### ⚠️ Important
 
 These metrics are **PaySim benchmark results**, not a guarantee of real-world banking performance.
 
-PaySim is a synthetic dataset whose fraud-generation process differs from real financial systems. The feature `would_drain_orig` contributes roughly **57% of feature importance** and strongly aligns with PaySim's synthetic fraud pattern.
+PaySim is a synthetic dataset whose fraud-generation process differs from real financial systems. The feature `would_drain_orig` contributes roughly **58% of feature importance** and strongly aligns with PaySim's synthetic fraud pattern.
 
-Therefore, the **0.9997 ROC-AUC should be interpreted as a dataset benchmark**, not as expected production accuracy.
+Therefore, the **ROC-AUC above should be interpreted as a dataset benchmark**, not as expected production accuracy.
 
 ---
 
@@ -123,7 +126,7 @@ Therefore, the **0.9997 ROC-AUC should be interpreted as a dataset benchmark**, 
 {
   "fraud_probability": 0.9997,
   "confidence": "99.97%",
-  "threshold": "98%",
+  "threshold": "99.1%",
   "is_fraud": true,
   "risk_level": "CRITICAL",
   "model": "XGBoost Fraud Classifier v1.0",
@@ -208,6 +211,8 @@ txn_count_24h
 is_dest_new
 ```
 
+`type` is validated against a fixed set (`PAYMENT`, `TRANSFER`, `CASH_OUT`, `DEBIT`, `CASH_IN`) at the API layer, so an invalid value fails cleanly with a 422 instead of reaching feature engineering.
+
 Post-transaction fields such as `newbalanceOrig` and `newbalanceDest` are **not used**, avoiding direct post-transaction information leakage.
 
 ### 2. Feature Engineering
@@ -231,10 +236,10 @@ The XGBoost classifier outputs a fraud probability between **0 and 1**.
 The current F1-optimized decision threshold is approximately:
 
 ```text
-0.984
+0.991
 ```
 
-A cost-weighted alternative threshold (~0.66) is also computed on every training run — see [Business-cost threshold](#-business-cost-threshold-simulated) below.
+A cost-weighted alternative threshold is also computed on every training run — see [Business-cost threshold](#-business-cost-threshold-simulated) below.
 
 ### 4. Risk Classification
 
@@ -262,13 +267,15 @@ Two of the model's features — `recency_hours` and `txn_count_24h` — are **ve
 
 Training now defaults to a **time-aware split** (`SPLIT_STRATEGY=time`, the default in `models/train.py`): the dataset is sorted by PaySim's `step` (simulated hour) and the most recent 20% is held out as the test set. This is the closer analogue to a live deployment, which only ever predicts on transactions that happen *after* everything it was trained on — a random/stratified split can interleave test rows chronologically with training rows in a way production never would. The original random stratified split is still available for comparison via `SPLIT_STRATEGY=random`.
 
-Both `models/metrics.json` and `models/model_registry.jsonl` record which `split_strategy` produced a given set of numbers, so results from the two approaches are never silently conflated.
+**Threshold selection uses a separate validation split, never the test set.** A further 10% of the training portion is carved out (time-ordered, same logic as the main split) as a validation set. Both the max-F1 threshold and the cost-based threshold (below) are selected by scoring the model on that validation split. The test set is then scored exactly once, using the threshold already fixed from validation — so the reported precision/recall/F1 aren't picked to fit the same data they're graded on.
+
+Both `models/metrics.json` and `models/model_registry.jsonl` record which `split_strategy` produced a given set of numbers (plus `n_val_rows` and `threshold_selected_on`), so results from different approaches are never silently conflated.
 
 ---
 
 ## 💵 Business-cost threshold (simulated)
 
-`models/train.py` computes a second candidate decision threshold that minimizes `false_positives × cost_fp + false_negatives × cost_fn` instead of maximizing F1. The default costs (`COST_FALSE_POSITIVE=5`, `COST_FALSE_NEGATIVE=100`) are **simulated business assumptions chosen to illustrate the mechanism** — a missed fraud costing roughly 20x an unnecessary manual review — not figures calibrated against any real cost-of-review or fraud-loss data.
+`models/train.py` computes a second candidate decision threshold — selected on the same validation split as the F1 threshold above — that minimizes `false_positives × cost_fp + false_negatives × cost_fn` instead of maximizing F1. The default costs (`COST_FALSE_POSITIVE=5`, `COST_FALSE_NEGATIVE=100`) are **simulated business assumptions chosen to illustrate the mechanism** — a missed fraud costing roughly 20x an unnecessary manual review — not figures calibrated against any real cost-of-review or fraud-loss data.
 
 This threshold is computed and recorded on every training run (`models/metrics.json` → `cost_threshold_assumptions`, which includes an explicit `note` field saying the same thing) but is **not** the one deployed by default; switching to it is an explicit opt-in via `THRESHOLD_STRATEGY=cost`. Before using it for anything beyond a demo, replace `COST_FALSE_POSITIVE` / `COST_FALSE_NEGATIVE` with real figures for your deployment.
 
@@ -496,6 +503,7 @@ THRESHOLD_STRATEGY=f1|cost          # default: f1  (see Business-cost threshold)
 * [x] Rate limiting
 * [x] Optional API-key authentication
 * [x] Time-aware evaluation split
+* [x] Validation-based threshold selection (no test-set leakage)
 * [ ] Persistent transaction history
 * [ ] Persistent metrics/logging (replace in-memory monitoring)
 * [ ] User authentication / RBAC
