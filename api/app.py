@@ -15,7 +15,7 @@ Run:
 import json
 import logging
 import time
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,8 +108,16 @@ class Transaction(BaseModel):
     # POST-transaction balances that don't exist yet at authorization time,
     # and including them let the old model leak the label instead of
     # learning real fraud signal. Only pre-transaction fields below.
-    type:            str   = Field(..., json_schema_extra={"example": "TRANSFER"},
-                                   description="PAYMENT | TRANSFER | CASH_OUT | DEBIT | CASH_IN")
+    #
+    # type is a Literal (not a bare str): PaySim only has these five
+    # transaction types, and the feature engineering / model layer assumes
+    # one of them. A bare `str` let arbitrary garbage (e.g. "FOO") past
+    # validation and into feature engineering instead of failing cleanly
+    # at the API boundary with a 422; Literal also turns this into a
+    # dropdown in the Swagger docs instead of free text.
+    type: Literal["PAYMENT", "TRANSFER", "CASH_OUT", "DEBIT", "CASH_IN"] = Field(
+        ..., json_schema_extra={"example": "TRANSFER"},
+        description="PAYMENT | TRANSFER | CASH_OUT | DEBIT | CASH_IN")
     amount:          float = Field(..., gt=0, json_schema_extra={"example": 9823.50})
     oldbalanceOrg:   float = Field(..., ge=0, json_schema_extra={"example": 10000.0})
     oldbalanceDest:  float = Field(..., ge=0, json_schema_extra={"example": 0.0})
@@ -243,7 +251,13 @@ def model_info():
         model_version = None
     return {
         "algorithm":       "XGBoost (XGBClassifier)",
-        "training_rows":   "6,362,620",
+        # Pulled from the last training run's real metrics instead of a
+        # hardcoded string -- a hardcoded row count here goes stale the
+        # moment the split strategy, dataset, or SMOTE settings change
+        # (it previously said "6,362,620" while metrics.json/README had
+        # long since moved to 5,591,878 after the time-aware split change).
+        # None until a training run has produced models/metrics.json.
+        "training_rows":   metrics.get("n_train_rows") if metrics else None,
         "features":        len(FEATURE_COLS),
         "target_latency":  "<100 ms",
         # Content-addressed hash of the currently-deployed model file --

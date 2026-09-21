@@ -23,6 +23,7 @@ from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
     roc_curve,
+    precision_recall_curve,
 )
 
 from imblearn.over_sampling import SMOTE
@@ -103,6 +104,13 @@ THRESHOLD_STRATEGY = os.environ.get("THRESHOLD_STRATEGY", "f1").lower()
 SPLIT_STRATEGY = os.environ.get("SPLIT_STRATEGY", "time").lower()
 TEST_SIZE = 0.2
 
+# Fraction of the *training* split (post train/test split, pre-SMOTE)
+# carved out as a validation set. The validation set is where
+# f1_threshold / cost_threshold get selected; the test set is touched
+# exactly once, for final reporting, with that threshold already fixed.
+# See _carve_validation() below for why this exists.
+VAL_SIZE = 0.1
+
 
 def load_data():
     print("Loading PaySim dataset...")
@@ -182,9 +190,11 @@ def _thin_curve(*arrays, max_points=60):
 def _split_dataset(df):
     """
     Splits into train/test using SPLIT_STRATEGY (see the module-level note
-    above). Returns (X_train, X_test, y_train, y_test) with columns
-    restricted to FEATURE_COLS, matching train_test_split's return shape
-    so callers don't care which strategy produced them.
+    above). Returns (train_df, test_df) as full DataFrames -- still
+    carrying 'step' and every pre-feature-selection column -- rather than
+    already-sliced X/y, because _carve_validation() below needs to split
+    train_df again the same way (time-ordered or random) before anything
+    gets restricted to FEATURE_COLS.
     """
     if SPLIT_STRATEGY == "time":
         df_sorted = df.sort_values("step", kind="mergesort")
@@ -207,10 +217,7 @@ def _split_dataset(df):
                 "SPLIT_STRATEGY=random for this sample."
             )
 
-        return (
-            train_df[FEATURE_COLS], test_df[FEATURE_COLS],
-            train_df["isFraud"], test_df["isFraud"],
-        )
+        return train_df, test_df
 
     print(
         "Random IID split (SPLIT_STRATEGY=random) -- kept for comparison "
@@ -220,11 +227,55 @@ def _split_dataset(df):
         "interleaved with training rows in a way a live deployment never "
         "would. Prefer SPLIT_STRATEGY=time (the default)."
     )
-    X = df[FEATURE_COLS]
-    y = df["isFraud"]
-    return train_test_split(
-        X, y, test_size=TEST_SIZE, stratify=y, random_state=SEED,
+    train_df, test_df = train_test_split(
+        df, test_size=TEST_SIZE, stratify=df["isFraud"], random_state=SEED,
     )
+    return train_df, test_df
+
+
+def _carve_validation(train_df):
+    """
+    Carves a validation set out of train_df, using the same splitting
+    logic as _split_dataset (time-ordered for SPLIT_STRATEGY=time, random
+    stratified otherwise), so the decision threshold (f1_threshold /
+    cost_threshold) gets selected on data that is neither trained on nor
+    the final test set.
+
+    Why this exists: train() previously picked f1_threshold/cost_threshold
+    from precision_recall_curve(y_test, probabilities) and then reported
+    precision/recall/F1 for that same threshold on that same y_test --
+    i.e. it graded itself on the exact data it used to choose the
+    threshold. ROC-AUC/PR-AUC are threshold-independent so they weren't
+    affected, but the threshold-dependent numbers (precision, recall, F1,
+    the confusion matrix) were mildly optimistic. Now: threshold selection
+    happens here / on this validation split, and the test set downstream
+    in train() is touched exactly once, for final reporting only.
+    """
+    if SPLIT_STRATEGY == "time":
+        train_sorted = train_df.sort_values("step", kind="mergesort")
+        split_idx = int(len(train_sorted) * (1 - VAL_SIZE))
+        train2_df = train_sorted.iloc[:split_idx]
+        val_df = train_sorted.iloc[split_idx:]
+    else:
+        train2_df, val_df = train_test_split(
+            train_df, test_size=VAL_SIZE, stratify=train_df["isFraud"],
+            random_state=SEED,
+        )
+
+    if train2_df["isFraud"].sum() == 0 or val_df["isFraud"].sum() == 0:
+        raise ValueError(
+            "Validation carve-out produced a train or val set with zero "
+            "fraud rows -- widen the dataset or lower VAL_SIZE."
+        )
+
+    print(
+        f"Validation carve-out: train = {len(train2_df):,} rows "
+        f"({train2_df['isFraud'].mean()*100:.4f}% fraud), "
+        f"val = {len(val_df):,} rows ({val_df['isFraud'].mean()*100:.4f}% fraud) "
+        f"-- threshold selection happens here, not on the test set"
+    )
+
+    return train2_df, val_df
 
 
 def train():
@@ -237,11 +288,17 @@ def train():
     df = engineer_features(df)
 
     print("Splitting dataset...")
-    X_train, X_test, y_train, y_test = _split_dataset(df)
+    train_df, test_df = _split_dataset(df)
+    train_df, val_df = _carve_validation(train_df)
+
+    X_train, y_train = train_df[FEATURE_COLS], train_df["isFraud"]
+    X_val, y_val = val_df[FEATURE_COLS], val_df["isFraud"]
+    X_test, y_test = test_df[FEATURE_COLS], test_df["isFraud"]
 
     scaler = StandardScaler()
 
     X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
     X_test = scaler.transform(X_test)
 
     print("Applying SMOTE...")
@@ -269,35 +326,33 @@ def train():
     model.fit(
         X_train,
         y_train,
-        eval_set=[(X_test, y_test)],
+        eval_set=[(X_val, y_val)],
         verbose=50,
     )
 
-    from sklearn.metrics import precision_recall_curve
+    # ── Threshold selection: validation set only ─────────────────────
+    # The test set is not touched until final reporting below.
+    val_probabilities = model.predict_proba(X_val)[:, 1]
 
-    probabilities = model.predict_proba(X_test)[:, 1]
-
-    precision, recall, thresholds = precision_recall_curve(
-        y_test,
-        probabilities
+    val_precision, val_recall, val_thresholds = precision_recall_curve(
+        y_val,
+        val_probabilities
     )
 
-    fpr, tpr, _roc_thresholds = roc_curve(y_test, probabilities)
-
-    f1_scores = (2 * precision[:-1] * recall[:-1]) / (
-        precision[:-1] + recall[:-1] + 1e-8
+    f1_scores = (2 * val_precision[:-1] * val_recall[:-1]) / (
+        val_precision[:-1] + val_recall[:-1] + 1e-8
     )
 
     best_index = np.argmax(f1_scores)
-    f1_threshold = float(thresholds[best_index])
+    f1_threshold = float(val_thresholds[best_index])
 
     cost_threshold, cost_value, _cost_curve = _select_threshold_by_cost(
-        y_test, probabilities, COST_FALSE_POSITIVE, COST_FALSE_NEGATIVE
+        y_val, val_probabilities, COST_FALSE_POSITIVE, COST_FALSE_NEGATIVE
     )
 
     selected_threshold = f1_threshold if THRESHOLD_STRATEGY != "cost" else cost_threshold
 
-    print("\nThreshold comparison:")
+    print("\nThreshold comparison (selected on the validation set):")
     print(f"  Max-F1 threshold   : {f1_threshold:.3f}")
     print(
         f"  Cost-based threshold: {cost_threshold:.3f}  "
@@ -307,7 +362,15 @@ def train():
     print(f"  Selected strategy  : '{THRESHOLD_STRATEGY}' -> using {selected_threshold:.3f}")
 
     best_threshold = selected_threshold
+
+    # ── Final report: test set, touched exactly once ─────────────────
+    probabilities = model.predict_proba(X_test)[:, 1]
     predictions = (probabilities >= best_threshold).astype(int)
+
+    fpr, tpr, _roc_thresholds = roc_curve(y_test, probabilities)
+    test_precision, test_recall, _test_thresholds = precision_recall_curve(
+        y_test, probabilities
+    )
 
     roc_auc = roc_auc_score(y_test, probabilities)
     pr_auc = average_precision_score(y_test, probabilities)
@@ -315,7 +378,7 @@ def train():
     cm = confusion_matrix(y_test, predictions)
 
     print("\n==============================")
-    print("Model Evaluation")
+    print("Model Evaluation (test set; threshold fixed from validation)")
     print("==============================")
     print(f"ROC-AUC : {roc_auc:.4f}")
     print(f"PR-AUC  : {pr_auc:.4f}")
@@ -336,7 +399,10 @@ def train():
     joblib.dump(best_threshold,
             os.path.join(MODEL_DIR, "threshold.pkl"))
 
-    thinned_precision, thinned_recall = _thin_curve(precision[:-1], recall[:-1])
+    # Curves saved to metrics.json are the *test* curves, matching the
+    # final reported roc_auc/pr_auc above (not the validation curve used
+    # only internally for threshold selection).
+    thinned_precision, thinned_recall = _thin_curve(test_precision[:-1], test_recall[:-1])
     thinned_fpr, thinned_tpr = _thin_curve(fpr, tpr)
 
     feature_importance_list = sorted(
@@ -360,6 +426,7 @@ def train():
         threshold_strategy=THRESHOLD_STRATEGY,
         split_strategy=SPLIT_STRATEGY,
         n_train_rows=len(X_train),
+        n_val_rows=len(X_val),
         n_test_rows=len(X_test),
         roc_curve_points={"fpr": thinned_fpr, "tpr": thinned_tpr},
         pr_curve_points={"precision": thinned_precision, "recall": thinned_recall},
@@ -377,6 +444,7 @@ def train():
         threshold_strategy=THRESHOLD_STRATEGY,
         split_strategy=SPLIT_STRATEGY,
         n_train_rows=len(X_train),
+        n_val_rows=len(X_val),
         n_test_rows=len(X_test),
     )
 
@@ -387,7 +455,7 @@ def train():
     
 def save_metrics(roc_auc, pr_auc, report, confusion, best_threshold,
                   f1_threshold, cost_threshold, cost_value, threshold_strategy,
-                  n_train_rows, n_test_rows, split_strategy="time",
+                  n_train_rows, n_test_rows, n_val_rows=None, split_strategy="time",
                   roc_curve_points=None, pr_curve_points=None,
                   feature_importance=None):
     """
@@ -399,6 +467,8 @@ def save_metrics(roc_auc, pr_auc, report, confusion, best_threshold,
     Records both the max-F1 and cost-based thresholds (and which one was
     actually selected) so a later reviewer can see the tradeoff instead of
     just the winner -- see PRD §5 "Threshold calibration by business cost".
+    Both thresholds are now selected on a validation split, not on the
+    test set itself -- see _carve_validation().
 
     roc_curve_points / pr_curve_points / feature_importance are optional
     so older callers (and any code depending on this signature) keep
@@ -414,10 +484,12 @@ def save_metrics(roc_auc, pr_auc, report, confusion, best_threshold,
         "xgboost_version": xgb.__version__,
         "n_features": len(FEATURE_COLS),
         "n_train_rows": int(n_train_rows),
+        "n_val_rows": int(n_val_rows) if n_val_rows is not None else None,
         "n_test_rows": int(n_test_rows),
         "split_strategy": split_strategy,
         "best_threshold": float(best_threshold),
         "threshold_strategy": threshold_strategy,
+        "threshold_selected_on": "validation",
         "f1_threshold": float(f1_threshold),
         "cost_threshold": float(cost_threshold),
         "cost_threshold_assumptions": {
@@ -456,7 +528,8 @@ def _compute_model_version(model_path):
 
 def append_to_registry(model_version, roc_auc, pr_auc, best_threshold,
                         f1_threshold, cost_threshold, threshold_strategy,
-                        n_train_rows, n_test_rows, split_strategy="time"):
+                        n_train_rows, n_test_rows, n_val_rows=None,
+                        split_strategy="time"):
     """
     Appends one line per training run to models/model_registry.jsonl --
     an append-only log of every model version ever produced, so past
@@ -481,6 +554,7 @@ def append_to_registry(model_version, roc_auc, pr_auc, best_threshold,
         "cost_threshold": float(cost_threshold),
         "split_strategy": split_strategy,
         "n_train_rows": int(n_train_rows),
+        "n_val_rows": int(n_val_rows) if n_val_rows is not None else None,
         "n_test_rows": int(n_test_rows),
     }
     with open(REGISTRY_PATH, "a") as f:
