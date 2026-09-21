@@ -15,7 +15,7 @@ Run:
 import json
 import logging
 import time
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -109,15 +109,20 @@ class Transaction(BaseModel):
     # and including them let the old model leak the label instead of
     # learning real fraud signal. Only pre-transaction fields below.
     #
-    # type is a Literal (not a bare str): PaySim only has these five
-    # transaction types, and the feature engineering / model layer assumes
-    # one of them. A bare `str` let arbitrary garbage (e.g. "FOO") past
-    # validation and into feature engineering instead of failing cleanly
-    # at the API boundary with a 422; Literal also turns this into a
-    # dropdown in the Swagger docs instead of free text.
-    type: Literal["PAYMENT", "TRANSFER", "CASH_OUT", "DEBIT", "CASH_IN"] = Field(
-        ..., json_schema_extra={"example": "TRANSFER"},
-        description="PAYMENT | TRANSFER | CASH_OUT | DEBIT | CASH_IN")
+    # type is deliberately a plain str, not a Literal/enum: unknown values
+    # (e.g. "WIRE_TRANSFER") are meant to pass Pydantic validation and be
+    # rejected one layer down, inside models/features.py, which raises a
+    # specific "Unknown transaction type" ValueError. That keeps type
+    # validation in the business-logic layer (testable independently of
+    # the API framework) rather than the API schema, and is what
+    # tests/test_api.py's test_predict_rejects_unknown_type_end_to_end /
+    # test_predict_exposes_real_error_under_api_debug exercise: a generic
+    # 500 by default, the real "Unknown transaction type" message only
+    # under API_DEBUG=true. Don't "tighten" this to a Literal -- it looks
+    # like an improvement but breaks that contract (turns the 500 into a
+    # 422 before predict_fraud() / features.py ever sees the value).
+    type:            str   = Field(..., json_schema_extra={"example": "TRANSFER"},
+                                   description="PAYMENT | TRANSFER | CASH_OUT | DEBIT | CASH_IN")
     amount:          float = Field(..., gt=0, json_schema_extra={"example": 9823.50})
     oldbalanceOrg:   float = Field(..., ge=0, json_schema_extra={"example": 10000.0})
     oldbalanceDest:  float = Field(..., ge=0, json_schema_extra={"example": 0.0})

@@ -190,11 +190,12 @@ def _thin_curve(*arrays, max_points=60):
 def _split_dataset(df):
     """
     Splits into train/test using SPLIT_STRATEGY (see the module-level note
-    above). Returns (train_df, test_df) as full DataFrames -- still
-    carrying 'step' and every pre-feature-selection column -- rather than
-    already-sliced X/y, because _carve_validation() below needs to split
-    train_df again the same way (time-ordered or random) before anything
-    gets restricted to FEATURE_COLS.
+    above). Returns (X_train, X_test, y_train, y_test), matching
+    train_test_split's return shape: X_train/X_test are full DataFrames
+    (still carrying 'step' and every pre-feature-selection column, not yet
+    restricted to FEATURE_COLS) since _carve_validation() below needs to
+    split X_train again the same way (time-ordered or random); y_train/
+    y_test are the corresponding 'isFraud' label Series.
     """
     if SPLIT_STRATEGY == "time":
         df_sorted = df.sort_values("step", kind="mergesort")
@@ -217,7 +218,7 @@ def _split_dataset(df):
                 "SPLIT_STRATEGY=random for this sample."
             )
 
-        return train_df, test_df
+        return train_df, test_df, train_df["isFraud"], test_df["isFraud"]
 
     print(
         "Random IID split (SPLIT_STRATEGY=random) -- kept for comparison "
@@ -230,7 +231,7 @@ def _split_dataset(df):
     train_df, test_df = train_test_split(
         df, test_size=TEST_SIZE, stratify=df["isFraud"], random_state=SEED,
     )
-    return train_df, test_df
+    return train_df, test_df, train_df["isFraud"], test_df["isFraud"]
 
 
 def _carve_validation(train_df):
@@ -288,7 +289,7 @@ def train():
     df = engineer_features(df)
 
     print("Splitting dataset...")
-    train_df, test_df = _split_dataset(df)
+    train_df, test_df, _, _ = _split_dataset(df)
     train_df, val_df = _carve_validation(train_df)
 
     X_train, y_train = train_df[FEATURE_COLS], train_df["isFraud"]
