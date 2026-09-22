@@ -109,20 +109,20 @@ class Transaction(BaseModel):
     # and including them let the old model leak the label instead of
     # learning real fraud signal. Only pre-transaction fields below.
     #
-    # type is deliberately a plain str, not a Literal/enum: unknown values
-    # (e.g. "WIRE_TRANSFER") are meant to pass Pydantic validation and be
-    # rejected one layer down, inside models/features.py, which raises a
-    # specific "Unknown transaction type" ValueError. That keeps type
-    # validation in the business-logic layer (testable independently of
-    # the API framework) rather than the API schema, and is what
-    # tests/test_api.py's test_predict_rejects_unknown_type_end_to_end /
-    # test_predict_exposes_real_error_under_api_debug exercise: a generic
-    # 500 by default, the real "Unknown transaction type" message only
-    # under API_DEBUG=true. Don't "tighten" this to a Literal -- it looks
-    # like an improvement but breaks that contract (turns the 500 into a
-    # 422 before predict_fraud() / features.py ever sees the value).
-    type:            str   = Field(..., json_schema_extra={"example": "TRANSFER"},
-                                   description="PAYMENT | TRANSFER | CASH_OUT | DEBIT | CASH_IN")
+    # type is a plain str (not a Literal): unknown transaction types must
+    # reach engineer_features(), which is the single source of truth for
+    # validation and raises a controlled ValueError there. That lets the
+    # API return a sanitized 500 (or the real error under API_DEBUG=true)
+    # instead of Pydantic rejecting the request with a 422 before it ever
+    # reaches the handler. The enum is still documented for Swagger via
+    # json_schema_extra below.
+    type: str = Field(
+        ...,
+        json_schema_extra={
+            "example": "TRANSFER",
+            "enum": ["PAYMENT", "TRANSFER", "CASH_OUT", "DEBIT", "CASH_IN"],
+        },
+        description="PAYMENT | TRANSFER | CASH_OUT | DEBIT | CASH_IN")
     amount:          float = Field(..., gt=0, json_schema_extra={"example": 9823.50})
     oldbalanceOrg:   float = Field(..., ge=0, json_schema_extra={"example": 10000.0})
     oldbalanceDest:  float = Field(..., ge=0, json_schema_extra={"example": 0.0})

@@ -190,12 +190,13 @@ def _thin_curve(*arrays, max_points=60):
 def _split_dataset(df):
     """
     Splits into train/test using SPLIT_STRATEGY (see the module-level note
-    above). Returns (X_train, X_test, y_train, y_test), matching
-    train_test_split's return shape: X_train/X_test are full DataFrames
-    (still carrying 'step' and every pre-feature-selection column, not yet
-    restricted to FEATURE_COLS) since _carve_validation() below needs to
-    split X_train again the same way (time-ordered or random); y_train/
-    y_test are the corresponding 'isFraud' label Series.
+    above). Returns (train_df, test_df, y_train, y_test): train_df and
+    test_df are full DataFrames -- still carrying 'step' and every
+    pre-feature-selection column -- rather than already-sliced X/y,
+    because _carve_validation() below needs to split train_df again the
+    same way (time-ordered or random) before anything gets restricted to
+    FEATURE_COLS. y_train and y_test are the corresponding 'isFraud'
+    Series, included for callers that just need the labels.
     """
     if SPLIT_STRATEGY == "time":
         df_sorted = df.sort_values("step", kind="mergesort")
