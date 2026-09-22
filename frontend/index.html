@@ -8,7 +8,7 @@
 
 <title>FraudShield AI | Real-Time Fraud Detection</title>
 
-<link rel="icon" href="favicon.ico">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
 
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Sora:wght@700;800&display=swap" rel="stylesheet">
 
@@ -3036,19 +3036,6 @@ function showTab(tabId, button){
 
 let insightsLoaded = false;
 
-const FALLBACK_FEATURE_IMPORTANCE = [
-    { feature: "would_drain_orig",     importance: 0.5732621 },
-    { feature: "amount_ratio_orig",    importance: 0.32706016 },
-    { feature: "log_oldbalanceOrg",    importance: 0.046139836 },
-    { feature: "type_enc",             importance: 0.018660944 },
-    { feature: "log_amount",           importance: 0.015885409 },
-    { feature: "dest_balance_anomaly", importance: 0.00907534 },
-    { feature: "is_dest_new",          importance: 0.008962766 },
-    { feature: "log_oldbalanceDest",   importance: 0.0008682208 },
-    { feature: "recency_hours",        importance: 0.0000852 },
-    { feature: "txn_count_24h",        importance: 0.0 }
-];
-
 function buildLineChartSVG(points, opts){
     const W = 300, H = 200, PAD = 32;
     const plotW = W - PAD * 2, plotH = H - PAD * 2;
@@ -3128,20 +3115,25 @@ async function loadInsights(){
             </div>`;
         }
 
-        const fiSource = Array.isArray(m.feature_importance) && m.feature_importance.length ? m.feature_importance : FALLBACK_FEATURE_IMPORTANCE;
         const fiIsLive = Array.isArray(m.feature_importance) && m.feature_importance.length;
-        const maxFi = Math.max(...fiSource.map(f => f.importance), 0.0001);
 
-        const fiHtml = `
+        const fiHtml = fiIsLive ? `
         <div class="card">
             <h3>🔧 Feature importance</h3>
-            <p class="section-note">${fiIsLive ? "From the currently deployed model's training run." : "From the repo's last committed training run — will switch to live once metrics.json includes feature_importance."}</p>
-            ${fiSource.map(f => `
+            <p class="section-note">From the currently deployed model's training run.</p>
+            ${(() => {
+                const maxFi = Math.max(...m.feature_importance.map(f => f.importance), 0.0001);
+                return m.feature_importance.map(f => `
                 <div class="fi-row">
                     <div class="fi-label">${f.feature}</div>
                     <div class="fi-track"><div class="fi-fill" style="width:${(f.importance/maxFi*100).toFixed(1)}%;"></div></div>
                     <div class="fi-value">${(f.importance*100).toFixed(1)}%</div>
-                </div>`).join("")}
+                </div>`).join("");
+            })()}
+        </div>` : `
+        <div class="card">
+            <h3>🔧 Feature importance</h3>
+            <p class="section-note">Metrics unavailable — the deployed model's metrics.json doesn't include feature_importance yet.</p>
         </div>`;
 
         let curvesHtml;
