@@ -23,6 +23,23 @@ A production-style fraud detection platform powered by **XGBoost**, **FastAPI**,
 
 ---
 
+## ✨ Features
+
+* 🧠 **XGBoost fraud classifier**
+* ⚡ **FastAPI REST API**
+* 📈 Fraud probability and confidence scoring
+* 🚦 **LOW / MEDIUM / HIGH / CRITICAL** risk classification
+* 🔎 **Per-prediction SHAP explanations**
+* 📦 Batch prediction support
+* 📊 Runtime prediction monitoring
+* 🛡️ Rate limiting
+* 🔐 Optional API-key authentication
+* 🌍 Configured CORS protection
+* 📚 Interactive Swagger/OpenAPI documentation
+* 🌐 Live Vercel + Render deployment
+
+---
+
 ## 🌐 Live Demo
 
 | Service         | Link                                               |
@@ -106,50 +123,6 @@ Therefore, the **ROC-AUC above should be interpreted as a dataset benchmark**, n
 
 ---
 
-## 🧪 Example Request
-
-```json
-{
-  "type": "TRANSFER",
-  "amount": 800000,
-  "oldbalanceOrg": 800000,
-  "oldbalanceDest": 0,
-  "recency_hours": 24.0,
-  "txn_count_24h": 1,
-  "is_dest_new": 1
-}
-```
-
-### Response
-
-```json
-{
-  "fraud_probability": 0.9997,
-  "confidence": "99.97%",
-  "threshold": "99.1%",
-  "is_fraud": true,
-  "risk_level": "CRITICAL",
-  "model": "XGBoost Fraud Classifier v1.0",
-  "model_version": "<model hash>",
-  "top_risk_factors": [
-    "Large transaction amount",
-    "High-risk transaction type (TRANSFER)",
-    "Transaction would fully drain sender account"
-  ],
-  "shap_top_factors": [
-    {
-      "feature": "would_drain_orig",
-      "direction": "increases risk"
-    }
-  ],
-  "inference_ms": 8.42
-}
-```
-
-> `fraud_probability` is returned as a **0–1 value**, while `confidence` is formatted as a percentage.
-
----
-
 ## 📸 Screenshots
 
 ### Dashboard
@@ -178,26 +151,26 @@ Therefore, the **ROC-AUC above should be interpreted as a dataset benchmark**, n
 
 ---
 
-## ✨ Features
+## 🛠️ Tech Stack
 
-* 🧠 **XGBoost fraud classifier**
-* ⚡ **FastAPI REST API**
-* 📈 Fraud probability and confidence scoring
-* 🚦 **LOW / MEDIUM / HIGH / CRITICAL** risk classification
-* 🔎 **Per-prediction SHAP explanations**
-* 📦 Batch prediction support
-* 📊 Runtime prediction monitoring
-* 🛡️ Rate limiting
-* 🔐 Optional API-key authentication
-* 🌍 Configured CORS protection
-* 📚 Interactive Swagger/OpenAPI documentation
-* 🌐 Live Vercel + Render deployment
+| Area           | Technologies                    |
+| -------------- | -------------------------------- |
+| Backend        | Python, FastAPI, Uvicorn        |
+| ML             | XGBoost, Scikit-Learn           |
+| Data           | Pandas, NumPy                   |
+| Validation     | Pydantic                        |
+| API Protection | SlowAPI, CORS, optional API key |
+| Frontend       | HTML, CSS, JavaScript           |
+| Deployment     | Vercel, Render                  |
+| Dataset        | PaySim                          |
 
 ---
 
-## 🔬 How It Works
+## 🔬 Implementation Details
 
-### 1. Transaction Input
+### 🔬 How It Works
+
+#### 1. Transaction Input
 
 The prediction API accepts:
 
@@ -215,7 +188,7 @@ is_dest_new
 
 Post-transaction fields such as `newbalanceOrig` and `newbalanceDest` are **not used**, avoiding direct post-transaction information leakage.
 
-### 2. Feature Engineering
+#### 2. Feature Engineering
 
 The model uses **10 engineered features**, including:
 
@@ -229,7 +202,7 @@ The model uses **10 engineered features**, including:
 * Transaction recency
 * 24-hour transaction count
 
-### 3. Model Prediction
+#### 3. Model Prediction
 
 The XGBoost classifier outputs a fraud probability between **0 and 1**.
 
@@ -241,7 +214,7 @@ The current F1-optimized decision threshold is approximately:
 
 A cost-weighted alternative threshold is also computed on every training run — see [Business-cost threshold](#-business-cost-threshold-simulated) below.
 
-### 4. Risk Classification
+#### 4. Risk Classification
 
 ```text
 < 0.30        → LOW
@@ -250,7 +223,7 @@ A cost-weighted alternative threshold is also computed on every training run —
 ≥ 0.85        → CRITICAL
 ```
 
-### 5. Explainability
+#### 5. Explainability
 
 Predictions can include:
 
@@ -259,9 +232,49 @@ Predictions can include:
 * Direction of each contribution
 * Human-readable prediction summary
 
----
+### 🧪 Example Request
 
-## 🕒 Evaluation methodology
+```json
+{
+  "type": "TRANSFER",
+  "amount": 800000,
+  "oldbalanceOrg": 800000,
+  "oldbalanceDest": 0,
+  "recency_hours": 24.0,
+  "txn_count_24h": 1,
+  "is_dest_new": 1
+}
+```
+
+#### Response
+
+```json
+{
+  "fraud_probability": 0.9997,
+  "confidence": "99.97%",
+  "threshold": "99.1%",
+  "is_fraud": true,
+  "risk_level": "CRITICAL",
+  "model": "XGBoost Fraud Classifier v1.0",
+  "model_version": "<model hash>",
+  "top_risk_factors": [
+    "Large transaction amount",
+    "High-risk transaction type (TRANSFER)",
+    "Transaction would fully drain sender account"
+  ],
+  "shap_top_factors": [
+    {
+      "feature": "would_drain_orig",
+      "direction": "increases risk"
+    }
+  ],
+  "inference_ms": 8.42
+}
+```
+
+> `fraud_probability` is returned as a **0–1 value**, while `confidence` is formatted as a percentage.
+
+### 🕒 Evaluation methodology
 
 Two of the model's features — `recency_hours` and `txn_count_24h` — are **velocity features**: derived at training time from the full PaySim event log's chronological order (how long since this sender's last transaction, how many transactions they made in the trailing 24h). That makes this dataset's train/test split a materially different decision than a normal IID classification problem.
 
@@ -271,17 +284,13 @@ Training now defaults to a **time-aware split** (`SPLIT_STRATEGY=time`, the defa
 
 Both `models/metrics.json` and `models/model_registry.jsonl` record which `split_strategy` produced a given set of numbers (plus `n_val_rows` and `threshold_selected_on`), so results from different approaches are never silently conflated.
 
----
-
-## 💵 Business-cost threshold (simulated)
+### 💵 Business-cost threshold (simulated)
 
 `models/train.py` computes a second candidate decision threshold — selected on the same validation split as the F1 threshold above — that minimizes `false_positives × cost_fp + false_negatives × cost_fn` instead of maximizing F1. The default costs (`COST_FALSE_POSITIVE=5`, `COST_FALSE_NEGATIVE=100`) are **simulated business assumptions chosen to illustrate the mechanism** — a missed fraud costing roughly 20x an unnecessary manual review — not figures calibrated against any real cost-of-review or fraud-loss data.
 
 This threshold is computed and recorded on every training run (`models/metrics.json` → `cost_threshold_assumptions`, which includes an explicit `note` field saying the same thing) but is **not** the one deployed by default; switching to it is an explicit opt-in via `THRESHOLD_STRATEGY=cost`. Before using it for anything beyond a demo, replace `COST_FALSE_POSITIVE` / `COST_FALSE_NEGATIVE` with real figures for your deployment.
 
----
-
-## 🔌 REST API
+### 🔌 REST API
 
 | Method | Endpoint               | Description                |
 | ------ | ---------------------- | -------------------------- |
@@ -297,7 +306,7 @@ Swagger documentation is available at:
 /docs
 ```
 
-### API Protection
+#### API Protection
 
 ```text
 /predict        → 30 requests/minute
@@ -318,13 +327,11 @@ X-API-Key: <your-api-key>
 
 The public demo leaves API-key authentication disabled so users can test the application without credentials.
 
-### Error responses
+#### Error responses
 
 Unexpected server-side errors return a generic `500` message (`"Internal error while scoring this transaction."`); the real exception is logged server-side, not disclosed in the response, since raw exception text can leak internal paths or data values. Set `API_DEBUG=true` (local development only) to get the real exception text back in the response body instead.
 
----
-
-## 📈 Monitoring & Model Versioning
+### 📈 Monitoring & Model Versioning
 
 The API tracks lightweight runtime information including:
 
@@ -361,21 +368,8 @@ This is a portfolio project, and it's built to be honest about where a real depl
 * **Business costs are simulated, not calibrated.** The cost-based threshold's `COST_FALSE_POSITIVE=5` / `COST_FALSE_NEGATIVE=100` are illustrative, not derived from real review-cost or fraud-loss data. See [Business-cost threshold](#-business-cost-threshold-simulated) above.
 * **PaySim is synthetic.** Metrics here are a dataset benchmark, not a real-world accuracy estimate — see the note under [Model Performance](#-model-performance).
 * **No persistent transaction history, auth, or RBAC yet** — see the roadmap below.
-
----
-
-## 🛠️ Tech Stack
-
-| Area           | Technologies                    |
-| -------------- | -------------------------------- |
-| Backend        | Python, FastAPI, Uvicorn        |
-| ML             | XGBoost, Scikit-Learn           |
-| Data           | Pandas, NumPy                   |
-| Validation     | Pydantic                        |
-| API Protection | SlowAPI, CORS, optional API key |
-| Frontend       | HTML, CSS, JavaScript           |
-| Deployment     | Vercel, Render                  |
-| Dataset        | PaySim                          |
+* **Model artifacts live in the repo**, not a model registry/object store. Fine at this size; a production setup would pull a specific model version from storage at startup instead.
+* **API-key auth exists but isn't required by default** — the public demo runs with it disabled so visitors can try the app without credentials; a production deployment would enable it, plus stronger identity/access controls.
 
 ---
 
