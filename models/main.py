@@ -230,7 +230,7 @@ def predict_fraud(transaction: dict) -> dict:
     confidence = round((fraud_prob if is_fraud else (1 - fraud_prob)) * 100, 2)
 
     return {
-        "fraud_probability": round(fraud_prob, 4),
+        "fraud_probability": round(fraud_prob, 6),
         "confidence": f"{confidence}%",
         "threshold": f"{_threshold*100:.0f}%",
         "is_fraud": is_fraud,
