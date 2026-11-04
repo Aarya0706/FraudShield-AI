@@ -109,15 +109,18 @@ def _generate_summary(transaction, fraud_prob, risk_level, is_fraud, risk_factor
         return (
             f"This {txn_type} transaction of ₹{amount:,.2f} has been flagged as "
             f"{risk_level} risk with a fraud probability of {fraud_prob*100:.2f}%. "
-            f"Key risk indicators include: "
-            f"{', '.join(risk_factors) if has_real_factors else 'a fraud probability above the flagging threshold'}."
+            + (
+                f"Rule-based checks noted: {', '.join(risk_factors)}."
+                if has_real_factors
+                else "The fraud probability is above the flagging threshold."
+            )
         )
 
     if is_elevated:
         return (
             f"This {txn_type} transaction of ₹{amount:,.2f} was not automatically flagged, "
             f"but carries a {risk_level.lower()} risk profile with a fraud probability of "
-            f"{fraud_prob*100:.2f}%. Risk indicators present: "
+            f"{fraud_prob*100:.2f}%. Rule-based checks noted: "
             f"{', '.join(risk_factors)}. Recommended for manual review."
         )
 
