@@ -2132,6 +2132,8 @@ Account &amp; behavior signals
 
 </div>
 
+<p id="presetNote" class="section-note" style="margin-top:12px;min-height:1.4em;"></p>
+
 </div>
 
 <button onclick="checkFraud()" class="analyze-btn">
@@ -2549,14 +2551,27 @@ const API_BASE = "https://fraud-detection-api-w9hz.onrender.com";
 
 const PRESETS = {
     normal:     { type:"PAYMENT",  amount:250,    oldbalanceOrg:5000,   oldbalanceDest:2000, recency_hours:18,  txn_count_24h:1,  is_dest_new:0 },
-    suspicious: { type:"TRANSFER", amount:45000,  oldbalanceOrg:60000,  oldbalanceDest:500,  recency_hours:2,   txn_count_24h:3,  is_dest_new:1 },
+    suspicious: { type:"TRANSFER", amount:60000,  oldbalanceOrg:60000,  oldbalanceDest:500,  recency_hours:2,   txn_count_24h:3,  is_dest_new:1 },
     drain:      { type:"CASH_OUT", amount:900000, oldbalanceOrg:900000, oldbalanceDest:0,    recency_hours:0.3, txn_count_24h:14, is_dest_new:1 },
     velocity:   { type:"TRANSFER", amount:15000,  oldbalanceOrg:200000, oldbalanceDest:50000,recency_hours:0.1, txn_count_24h:22, is_dest_new:0 }
+};
+
+// Shown under the preset buttons. The model was trained on PaySim, where fraud
+// almost always empties the sender's account, so it keys on "amount >= sender
+// balance" and barely reacts to velocity signals. These notes say so up front
+// instead of letting a low score on a "suspicious" preset look like a bug.
+const PRESET_NOTES = {
+    normal:     "Small payment from a well-funded account. Expected: low risk.",
+    suspicious: "Transfer of the sender's entire balance to a new account. The model flags this because it empties the account. Try lowering the amount below the balance and watch the score collapse: the model keys on account drain, not on amount alone.",
+    drain:      "Large cash-out that empties the sender's account, the exact pattern PaySim fraud follows. Expected: critical risk.",
+    velocity:   "Many transactions in a short window, but the account is not drained. This model learned almost nothing from velocity features in PaySim (txn_count_24h has ~0% importance), so a LOW score here is expected, not a bug. See the feature importance chart below."
 };
 
 function loadPreset(name){
     const p = PRESETS[name];
     if(!p) return;
+    const noteEl = document.getElementById("presetNote");
+    if(noteEl) noteEl.textContent = PRESET_NOTES[name] || "";
     document.getElementById("type").value = p.type;
     document.getElementById("amount").value = p.amount;
     document.getElementById("oldbalanceOrg").value = p.oldbalanceOrg;
@@ -2729,7 +2744,9 @@ async function checkFraud() {
         }
 
         const probability = result.fraud_probability * 100;
-        const probabilityStr = probability.toFixed(2);
+        // A tiny but non-zero score used to render as "0.0%", which reads as
+        // "exactly zero". Show "<0.01" instead.
+        const probabilityStr = (probability > 0 && probability < 0.01) ? "<0.01" : probability.toFixed(2);
 
         let color = "#22c55e";
 
@@ -2819,7 +2836,7 @@ async function checkFraud() {
                 </svg>
             </div>
 
-            ${!result.is_fraud ? `<p class="section-note" style="text-align:center;">Not flagged — a low score, not a guarantee of legitimacy.</p>` : ""}
+            ${!result.is_fraud ? `<p class="section-note" style="text-align:center;">Not flagged — a low score, not a guarantee of legitimacy. This model mainly learned PaySim's account-drain pattern, so velocity and balance-history signals have little influence on the score.</p>` : ""}
 
         </div>
 
@@ -2945,7 +2962,9 @@ async function checkFraud() {
                     const step = (now) => {
                         const t = Math.min(1, (now - start) / duration);
                         const eased = 1 - Math.pow(1 - t, 3);
-                        pctText.textContent = (probability * eased).toFixed(1) + "%";
+                        pctText.textContent = t < 1
+                            ? (probability * eased).toFixed(1) + "%"
+                            : probabilityStr + "%";
                         if (t < 1) requestAnimationFrame(step);
                     };
                     requestAnimationFrame(step);
